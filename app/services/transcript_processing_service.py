@@ -1,90 +1,138 @@
 import asyncio
+import logging
+import math
 
 from app.core.config import settings
 from app.services.gemini_service import generate_json
 from app.templates.prompt_templates import TRANSCRIPT_TRANSLATION_AND_ROLE_INSTRUCTIONS
 
+logger = logging.getLogger(__name__)
 _llm_semaphore = asyncio.Semaphore(settings.llm_concurrency)
-TRANSLATION_MODEL = "gemini-3.5-flash-lite"
+VALID_ROLES = {"teacher", "student", "unknown"}
+BATCH_ATTEMPTS = 2
+# More than this share of segments missing means the model output is not trustworthy.
+MAX_FALLBACK_SHARE = 0.2
+MIN_FALLBACK_ALLOWANCE = 3
+
+
+def _clean_role(value) -> str:
+    role = value.strip().lower() if isinstance(value, str) else ""
+    return role if role in VALID_ROLES else "unknown"
+
+
+def _clean_confidence(value) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return 0.0
+    return max(0.0, min(1.0, float(value)))
+
+
+def _clean_index(value):
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
+def _parse_batch(result_segments, expected_indexes: range, needs_translation: bool) -> dict[int, dict]:
+    """Keep every usable entry; ignore invalid, out-of-range and duplicate ones."""
+    parsed: dict[int, dict] = {}
+    if not isinstance(result_segments, list):
+        return parsed
+    for result_segment in result_segments:
+        if not isinstance(result_segment, dict):
+            continue
+        index = _clean_index(result_segment.get("index"))
+        if index is None or index not in expected_indexes or index in parsed:
+            continue
+        text = result_segment.get("text")
+        if needs_translation and not (isinstance(text, str) and text.strip()):
+            continue
+        confidence = _clean_confidence(result_segment.get("confidence"))
+        parsed[index] = {
+            "text": text if isinstance(text, str) else "",
+            "speaker_role": _clean_role(result_segment.get("speaker_role")),
+            "role_confidence": confidence,
+            "role_evidence": str(result_segment.get("reason") or "")[:160] if confidence < 0.6 else "",
+        }
+    return parsed
 
 
 async def translate_and_label(transcript: dict) -> tuple[dict, dict, bool, dict]:
     source_language = str(transcript.get("language") or "").strip().lower()
     needs_translation = not (source_language == "en" or source_language.startswith("en-"))
     source_segments = transcript.get("segments", [])
-    batch_size = settings.llm_batch_size
+    batch_size = max(1, settings.llm_batch_size)
     batches = [
         (start, source_segments[start:start + batch_size])
         for start in range(0, len(source_segments), batch_size)
     ]
 
-    async def process_batch(start: int, batch: list[dict]) -> tuple[int, list[dict]]:
-        payload_segments = [
-            {
-                "index": start + offset,
-                "start": segment.get("start"),
-                "text": str(segment.get("text") or ""),
-            }
-            for offset, segment in enumerate(batch)
-        ]
-        async with _llm_semaphore:
-            response = await asyncio.to_thread(
-                generate_json,
-                TRANSCRIPT_TRANSLATION_AND_ROLE_INSTRUCTIONS,
+    async def process_batch(start: int, batch: list[dict]) -> dict[int, dict]:
+        expected_indexes = range(start, start + len(batch))
+        parsed: dict[int, dict] = {}
+        for attempt in range(BATCH_ATTEMPTS):
+            # On a retry, only ask again for the segments the model skipped.
+            payload_segments = [
                 {
-                    "source_language": source_language or "unknown",
-                    "target_language": "English",
-                    "translate": needs_translation,
-                    "segments": payload_segments,
-                },
-                False,
-                TRANSLATION_MODEL,
-            )
-        result_segments = response.get("segments")
-        if not isinstance(result_segments, list):
-            raise ValueError("Gemini transcript processing did not return a segment list")
-        return start, result_segments
+                    "index": index,
+                    "start": source_segments[index].get("start"),
+                    "text": str(source_segments[index].get("text") or ""),
+                }
+                for index in expected_indexes
+                if index not in parsed
+            ]
+            if not payload_segments:
+                break
+            async with _llm_semaphore:
+                response = await asyncio.to_thread(
+                    generate_json,
+                    TRANSCRIPT_TRANSLATION_AND_ROLE_INSTRUCTIONS,
+                    {
+                        "source_language": source_language or "unknown",
+                        "target_language": "English",
+                        "translate": needs_translation,
+                        "segments": payload_segments,
+                    },
+                    thinking=False,
+                    model_name=settings.gemini_light_model,
+                    list_key="segments",
+                )
+            parsed.update(_parse_batch(response.get("segments"), expected_indexes, needs_translation))
+            if len(parsed) < len(batch):
+                logger.warning(
+                    "[transcript.process] model skipped segments batch_start=%s missing=%s attempt=%s",
+                    start,
+                    len(batch) - len(parsed),
+                    attempt + 1,
+                )
+        return parsed
 
     results = await asyncio.gather(
         *(process_batch(start, batch) for start, batch in batches),
         return_exceptions=True,
     )
-    labels = {}
-    for (start, batch), batch_result in zip(batches, results):
+    labels: dict[int, dict] = {}
+    for batch_result in results:
         if isinstance(batch_result, BaseException):
             raise batch_result
-        _, result_segments = batch_result
-        expected_indexes = set(range(start, start + len(batch)))
-        for result_segment in result_segments:
-            if not isinstance(result_segment, dict):
-                continue
-            index = result_segment.get("index")
-            if (
-                not isinstance(index, int)
-                or isinstance(index, bool)
-                or index not in expected_indexes
-                or index in labels
-            ):
-                raise ValueError("Gemini transcript processing returned an invalid or duplicate index")
-            role = result_segment.get("speaker_role")
-            if role not in {"teacher", "student", "unknown"}:
-                raise ValueError("Gemini transcript processing returned an invalid speaker role")
-            confidence = result_segment.get("confidence", 0.0)
-            if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
-                confidence = 0.0
-            text = result_segment.get("text")
-            if not isinstance(text, str):
-                raise ValueError("Gemini transcript processing returned invalid segment text")
-            labels[index] = {
-                "text": text if needs_translation else str(source_segments[index].get("text") or ""),
-                "speaker_role": role,
-                "role_confidence": max(0.0, min(1.0, float(confidence))),
-                "role_evidence": str(result_segment.get("reason") or "")[:160]
-                if confidence < 0.6 else "",
-            }
+        labels.update(batch_result)
 
-    if len(labels) != len(source_segments) or set(labels) != set(range(len(source_segments))):
-        raise ValueError("Gemini transcript processing omitted one or more segment indexes")
+    fallback_count = len(source_segments) - len(labels)
+    if fallback_count > max(MIN_FALLBACK_ALLOWANCE, MAX_FALLBACK_SHARE * len(source_segments)):
+        raise ValueError(
+            f"Gemini transcript processing omitted too many segments ({fallback_count} of {len(source_segments)})"
+        )
+    if fallback_count:
+        logger.warning(
+            "[transcript.process] using source text and unknown role for %s of %s segments",
+            fallback_count,
+            len(source_segments),
+        )
 
     source_output = {**transcript, "segments": []}
     english_output = {
@@ -94,7 +142,14 @@ async def translate_and_label(transcript: dict) -> tuple[dict, dict, bool, dict]
         "segments": [],
     }
     for index, source_segment in enumerate(source_segments):
-        label = labels[index]
+        source_text = str(source_segment.get("text") or "")
+        label = labels.get(index) or {
+            "text": source_text,
+            "speaker_role": "unknown",
+            "role_confidence": 0.0,
+            "role_evidence": "",
+        }
+        english_text = label["text"] if needs_translation else source_text
         source_output["segments"].append(
             {
                 **source_segment,
@@ -106,7 +161,7 @@ async def translate_and_label(transcript: dict) -> tuple[dict, dict, bool, dict]
         english_output["segments"].append(
             {
                 **source_segment,
-                "text": label["text"],
+                "text": english_text,
                 "speaker_role": label["speaker_role"],
                 "role_confidence": label["role_confidence"],
                 "role_evidence": label["role_evidence"],

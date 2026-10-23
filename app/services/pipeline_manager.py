@@ -76,6 +76,10 @@ def _checkpoint_from_result(evaluation_result):
     return transcript if isinstance(transcript, dict) else None
 
 
+class EvaluationAlreadyCompleted(ValueError):
+    pass
+
+
 async def run(object_key: str, evaluation_id: str | None) -> dict:
     total_started_at = time.perf_counter()
     stage = "load evaluation"
@@ -91,7 +95,7 @@ async def run(object_key: str, evaluation_id: str | None) -> dict:
             if row is None:
                 raise LookupError("Evaluation not found")
             if row["status"] == "completed":
-                raise ValueError("Evaluation is already completed")
+                raise EvaluationAlreadyCompleted("Evaluation is already completed")
             checkpoint = _checkpoint_from_result(row.get("evaluation_result"))
             async with timed_stage(logger, "mark evaluation processing", evaluation_id):
                 await mark_processing(evaluation_id)
@@ -170,7 +174,22 @@ async def run(object_key: str, evaluation_id: str | None) -> dict:
             if isinstance(teaching_result, BaseException):
                 stage = "teaching effectiveness scoring"
                 raise teaching_result
-            if isinstance(video_result, BaseException):
+            if isinstance(video_result, Exception):
+                # Video is reported separately from the teaching score, so a video
+                # failure must not discard the rest of the analysis.
+                logger.error(
+                    "[pipeline.run] video screen analysis failed; continuing without it evaluation_id=%s",
+                    evaluation_id,
+                    exc_info=video_result,
+                )
+                video_result = {
+                    "assessable": False,
+                    "score": None,
+                    "reason": "Video analysis failed; see service logs.",
+                    "observations": [],
+                    "limitations": ["Video analysis did not complete, so no screen readability score is available."],
+                }
+            elif isinstance(video_result, BaseException):
                 stage = "video screen analysis"
                 raise video_result
             teaching = teaching_result
@@ -231,7 +250,13 @@ async def run(object_key: str, evaluation_id: str | None) -> dict:
             evaluation_id,
         )
         if evaluation_id and evaluation_started:
-            await mark_failed(evaluation_id, "Analysis failed; check service logs.")
+            try:
+                await mark_failed(evaluation_id, "Analysis failed; check service logs.")
+            except Exception:
+                logger.exception(
+                    "[pipeline.run] could not mark evaluation failed evaluation_id=%s",
+                    evaluation_id,
+                )
         raise
     finally:
         logger.info(

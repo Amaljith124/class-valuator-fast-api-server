@@ -21,7 +21,23 @@ def _video_duration(path: str) -> float:
     )
     if result.returncode != 0:
         return 0.0
-    return float(json.loads(result.stdout).get("format", {}).get("duration", 0.0))
+    try:
+        return float(json.loads(result.stdout).get("format", {}).get("duration", 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _sample_timestamps(duration: float, interval: int, maximum: int) -> list[float]:
+    """Spread the frame budget across the whole recording, not just its first minutes."""
+    if duration <= 0 or maximum <= 0:
+        return []
+    step = max(float(interval), duration / maximum)
+    timestamps = []
+    position = 0.0
+    while position < duration and len(timestamps) < maximum:
+        timestamps.append(round(position, 3))
+        position += step
+    return timestamps
 
 
 def _extract_frame(path: str, timestamp: float, folder: str, index: int):
@@ -45,10 +61,7 @@ def frames(path: str, interval: int | None = None, maximum: int | None = None) -
     interval = interval or settings.frame_interval_seconds
     maximum = min(maximum or settings.max_video_frames, settings.max_video_frames)
     duration = _video_duration(path)
-    timestamps = [
-        float(timestamp)
-        for timestamp in range(0, int(duration), interval)
-    ][:maximum]
+    timestamps = _sample_timestamps(duration, interval, maximum)
     if not timestamps:
         return []
 
@@ -90,7 +103,8 @@ def analyze(path: str, transcript: dict) -> dict:
                 "text": segment.get("text", ""),
             }
             for index, segment in enumerate(transcript.get("segments", []))
-            if timestamp - 15 <= segment.get("start", 0) <= timestamp + 15
+            if isinstance(segment.get("start"), (int, float))
+            and timestamp - 15 <= segment["start"] <= timestamp + 15
         ]
         excerpts.append({"timestamp_seconds": timestamp, "transcript_segments": nearby[:10]})
 
@@ -102,8 +116,12 @@ def analyze(path: str, transcript: dict) -> dict:
             "transcript_context": excerpts,
         },
         image_bytes,
+        list_key="observations",
     )
-    observations = result.get("observations", [])
+    observations = result.get("observations")
+    if not isinstance(observations, list):
+        observations = []
+    result["observations"] = observations
     scores = [
         float(item["readability_score"])
         for item in observations

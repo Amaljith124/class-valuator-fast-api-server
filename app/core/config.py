@@ -11,7 +11,8 @@ class Settings(BaseSettings):
     r2_endpoint: str
     r2_region: str = "auto"
     gemini_api_key: str
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3.5-flash"
+    gemini_light_model: str = "gemini-3.5-flash-lite"
     internal_api_token: str
     whisper_model: str = "base"
     whisper_device: str = "cpu"

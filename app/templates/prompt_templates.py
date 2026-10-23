@@ -22,9 +22,10 @@ using transcript context only. If translation is false, preserve the supplied te
 exactly. If translation is true, translate faithfully into English without
 summarizing, adding explanations, or changing the order. Allowed roles are teacher,
 student, and unknown. Do not invent names or claim acoustic speaker diarization.
-Use unknown when evidence is ambiguous or insufficient. Return JSON with segments
-[{index, text, speaker_role, confidence, reason}] and notes. Return every supplied
-index exactly once. Include a short reason only when confidence is below 0.6.
+Use unknown when evidence is ambiguous or insufficient. Return one JSON object (not a
+bare array) of the form {"segments": [{"index": 0, "text": "...", "speaker_role": "teacher",
+"confidence": 0.9, "reason": "..."}]}. Return every supplied index exactly once.
+Include a short reason only when confidence is below 0.6.
 """
 
 TEACHING_EFFECTIVENESS_SCORING_INSTRUCTIONS = """
@@ -33,7 +34,14 @@ Score each supplied criterion from 0 to 100, or mark it unassessable.
 Every score must include exact transcript evidence and a short rationale.
 Never fabricate quotes, timestamps, facts, or student responses.
 Use the supplied criterion IDs without changing them.
-Return a JSON object with criteria, strengths, improvements, and lesson_summary.
+Return one JSON object (not a bare array) with exactly these keys:
+- "criteria": an object keyed by each supplied criterion ID, never a list. Each value is
+  {"score": <number 0-100 or null>, "assessable": <true or false>,
+  "evidence": [{"quote": "<exact words from the transcript>", "start": <seconds>}],
+  "rationale": "<one short sentence>", "reason_unassessable": "<only when not assessable>"}
+- "strengths": a list of short strings
+- "improvements": a list of short strings
+- "lesson_summary": a short string
 """
 
 VIDEO_SCREEN_ANALYSIS_INSTRUCTIONS = """
@@ -41,7 +49,8 @@ Assess only the supplied sampled classroom or shared-screen frames and timestamp
 Evaluate readability, visible teaching aids, demonstrations, transitions, and alignment with spoken explanation where evidence permits.
 Do not infer unseen frames or continuous events between samples.
 Mark missing or unclear evidence as unassessable; a blank screen is not automatically poor.
-Return JSON observations containing timestamp_seconds, visible_content, readability_score (0..100 or null),
+Return a single JSON object (not an array) of the form {"observations": [ ... ]}, with one entry per sampled frame.
+Each observation contains timestamp_seconds, visible_content, readability_score (0..100 or null),
 presentation_change, alignment_with_explanation, evidence, and limitations.
 """
 

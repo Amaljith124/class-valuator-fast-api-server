@@ -11,7 +11,7 @@ from app.services.transcript_processing_service import translate_and_label
 from app.services.teaching_service import score
 from app.services.audio_quality_service import analyze as analyze_audio
 from app.services.video_screen_service import analyze as analyze_video
-from app.services.pipeline_manager import run
+from app.services.pipeline_manager import EvaluationAlreadyCompleted, run
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ async def analyze(request: AnalyzeRequest, _=Depends(require_internal_token)):
         return {"success":True,"message":"Analysis completed","data":data}
     except LookupError as exc:
         raise HTTPException(status_code=404,detail="Evaluation not found") from exc
-    except ValueError as exc:
+    except EvaluationAlreadyCompleted as exc:
         raise HTTPException(status_code=409,detail=str(exc)) from exc
     except Exception as exc:
         logger.exception(
