@@ -160,3 +160,35 @@ def test_a_model_that_rejects_the_output_limit_is_retried_with_a_safe_one(monkey
 
     assert gemini.generate_json("instructions", {}) == {"ok": 1}
     assert seen == [gemini.MAX_OUTPUT_TOKENS, gemini.SAFE_OUTPUT_TOKENS]
+
+
+def test_schema_is_sent_to_the_model(monkeypatch):
+    seen = []
+
+    class RecordingClient(_FakeClient):
+        def _generate(self, **kwargs):
+            seen.append(kwargs["config"].response_json_schema)
+            return super()._generate(**kwargs)
+
+    schema = {"type": "object", "properties": {"ok": {"type": "integer"}}, "required": ["ok"]}
+    fake = RecordingClient([_response('{"ok": 1}')])
+    monkeypatch.setattr(gemini, "client", lambda: fake)
+
+    assert gemini.generate_json("instructions", {}, schema=schema) == {"ok": 1}
+    assert seen == [schema]
+
+
+def test_a_rejected_schema_is_retried_without_it(monkeypatch, sleeps):
+    seen = []
+
+    class RecordingClient(_FakeClient):
+        def _generate(self, **kwargs):
+            seen.append(kwargs["config"].response_json_schema)
+            return super()._generate(**kwargs)
+
+    schema = {"type": "object", "properties": {}}
+    fake = RecordingClient([_ApiError(400, "Invalid JSON schema in request"), _response('{"ok": 1}')])
+    monkeypatch.setattr(gemini, "client", lambda: fake)
+
+    assert gemini.generate_json("instructions", {}, schema=schema) == {"ok": 1}
+    assert seen == [schema, None]

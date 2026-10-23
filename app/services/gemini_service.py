@@ -88,13 +88,22 @@ def _retry_delay_seconds(error: Exception, retries_done: int) -> float:
     return base * (2 ** (retries_done - 1)) + random.uniform(0, 0.5)
 
 
-def _generate_once(contents, instructions: str, thinking: bool | None, model_name: str, max_output_tokens: int):
+def _generate_once(
+    contents,
+    instructions: str,
+    thinking: bool | None,
+    model_name: str,
+    max_output_tokens: int,
+    schema: dict | None = None,
+):
     config_values = {
         "system_instruction": instructions,
         "response_mime_type": "application/json",
         "temperature": 0,
         "max_output_tokens": max_output_tokens,
     }
+    if schema is not None:
+        config_values["response_json_schema"] = schema
     thinking_config = _thinking_config(thinking, model_name)
     if thinking_config is not None:
         config_values["thinking_config"] = thinking_config
@@ -111,13 +120,17 @@ def _generate_with_retry(
     thinking: bool | None,
     model_name: str,
     max_output_tokens: int = MAX_OUTPUT_TOKENS,
+    schema: dict | None = None,
 ):
+    request_schema = schema
     request_thinking = thinking
     request_max_tokens = max_output_tokens
     retries_done = 0
     while True:
         try:
-            return _generate_once(contents, instructions, request_thinking, model_name, request_max_tokens)
+            return _generate_once(
+                contents, instructions, request_thinking, model_name, request_max_tokens, request_schema
+            )
         except Exception as error:
             message = str(error).lower()
             rejected_output_limit = (
@@ -132,6 +145,16 @@ def _generate_with_retry(
                     SAFE_OUTPUT_TOKENS,
                 )
                 request_max_tokens = SAFE_OUTPUT_TOKENS
+                continue
+            rejected_schema = (
+                request_schema is not None
+                and _status_code(error) == 400
+                and "schema" in message
+            )
+            if rejected_schema:
+                # Prompt-described shape plus tolerant parsing still apply without the schema.
+                logger.warning("[gemini.generate] model rejected response schema; retrying without it: %s", error)
+                request_schema = None
                 continue
             rejected_thinking = (
                 request_thinking is False
@@ -181,6 +204,7 @@ def _generate_json_response(
     model_name: str,
     list_key: str | None,
     max_output_tokens: int | None,
+    schema: dict | None = None,
 ) -> dict:
     """Call the model and parse its answer, asking once more if the answer is unusable."""
     last_error: GeminiOutputError | None = None
@@ -191,6 +215,7 @@ def _generate_json_response(
             thinking,
             model_name,
             max_output_tokens or MAX_OUTPUT_TOKENS,
+            schema,
         )
         try:
             return _response_json(response, list_key)
@@ -214,6 +239,7 @@ def generate_json(
     model_name: str | None = None,
     list_key: str | None = None,
     max_output_tokens: int | None = None,
+    schema: dict | None = None,
 ) -> dict:
     return _generate_json_response(
         json.dumps(payload, ensure_ascii=False),
@@ -222,6 +248,7 @@ def generate_json(
         model_name or settings.gemini_model,
         list_key,
         max_output_tokens,
+        schema,
     )
 
 
@@ -232,6 +259,7 @@ def analyze_images(
     thinking: bool | None = None,
     list_key: str | None = None,
     max_output_tokens: int | None = None,
+    schema: dict | None = None,
 ) -> dict:
     contents: list = [json.dumps(text_payload, ensure_ascii=False)]
     contents.extend(types.Part.from_bytes(data=data, mime_type="image/jpeg") for data in image_bytes)
@@ -242,4 +270,5 @@ def analyze_images(
         settings.gemini_model,
         list_key,
         max_output_tokens,
+        schema,
     )

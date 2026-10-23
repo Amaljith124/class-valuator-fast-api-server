@@ -4,6 +4,7 @@ import math
 
 from app.core.config import settings
 from app.services.gemini_service import generate_json
+from app.services.schemas import SEGMENTS_SCHEMA
 from app.templates.prompt_templates import TRANSCRIPT_TRANSLATION_AND_ROLE_INSTRUCTIONS
 
 logger = logging.getLogger(__name__)
@@ -101,6 +102,7 @@ async def translate_and_label(transcript: dict) -> tuple[dict, dict, bool, dict]
                     thinking=False,
                     model_name=settings.gemini_light_model,
                     list_key="segments",
+                    schema=SEGMENTS_SCHEMA,
                 )
             parsed.update(_parse_batch(response.get("segments"), expected_indexes, needs_translation))
             if len(parsed) < len(batch):

@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from app.core.config import settings
 from app.services.gemini_service import analyze_images
+from app.services.schemas import VIDEO_SCHEMA
 from app.templates.prompt_templates import VIDEO_SCREEN_ANALYSIS_INSTRUCTIONS
 
 
@@ -117,6 +118,7 @@ def analyze(path: str, transcript: dict) -> dict:
         },
         image_bytes,
         list_key="observations",
+        schema=VIDEO_SCHEMA,
     )
     observations = result.get("observations")
     if not isinstance(observations, list):

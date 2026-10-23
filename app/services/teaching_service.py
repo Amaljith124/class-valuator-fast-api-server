@@ -3,6 +3,7 @@ import math
 import re
 
 from app.services.gemini_service import generate_json
+from app.services.schemas import TEACHING_SCHEMA
 from app.templates.prompt_templates import TEACHING_EFFECTIVENESS_SCORING_INSTRUCTIONS
 
 CRITERIA = ["subject_accuracy","explanation_clarity","teaching_methods","class_structure","pacing","student_interaction","responsiveness","lesson_summary"]
@@ -124,7 +125,7 @@ def score(transcript: dict) -> dict:
             for index, segment in enumerate(transcript.get("segments", []))
         ],
     }
-    result = generate_json(TEACHING_EFFECTIVENESS_SCORING_INSTRUCTIONS, payload, list_key="criteria")
+    result = generate_json(TEACHING_EFFECTIVENESS_SCORING_INSTRUCTIONS, payload, list_key="criteria", schema=TEACHING_SCHEMA)
     entries = _criteria_by_name(result.get("criteria"))
     criteria = {}
     for name in CRITERIA:
