@@ -89,6 +89,7 @@ def combine(teaching: dict, audio: dict, video: dict, transcript: dict) -> dict:
             "evidence": evidence if isinstance(evidence, list) else [],
             "assessable": assessable,
             "reason_unassessable": None if assessable else reason,
+            "score_notes": item.get("score_notes", []) if assessable and isinstance(item.get("score_notes"), list) else [],
         }
         if assessable:
             total += score * WEIGHTS[name]
@@ -99,6 +100,7 @@ def combine(teaching: dict, audio: dict, video: dict, transcript: dict) -> dict:
         "overall_score": round(total / used, 2) if used else None,
         "score_coverage": round(used, 3),
         "weights": WEIGHTS,
+        "lesson_observations": teaching.get("observations", {}) if isinstance(teaching.get("observations"), dict) else {},
         "audio_quality": audio,
         "video_screen_analysis": video,
         "summary": teaching.get("lesson_summary", ""),

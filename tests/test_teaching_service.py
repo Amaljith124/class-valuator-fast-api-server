@@ -127,3 +127,79 @@ def test_blank_segments_count_as_no_speech(monkeypatch):
     result = teaching_service.score({"segments": [{"text": "  "}, {"text": ""}]})
 
     assert all(result["criteria"][name]["assessable"] is False for name in CRITERIA)
+
+
+_GOOD_OBSERVATIONS = {
+    "objective_stated": True,
+    "new_concept_taught": True,
+    "explains_why": "often",
+    "understanding_checks": 3,
+    "recap_or_summary": True,
+    "homework_or_next_steps": False,
+    "feedback_on_student_work": True,
+    "teacher_present_until_end": True,
+    "first_teaching_minute": 4,
+    "instruction_delivered_by_media": False,
+    "class_type": "instruction",
+}
+
+
+def _scored(monkeypatch, observations):
+    criteria = {name: _criterion(90) for name in CRITERIA}
+    return _run(monkeypatch, {"criteria": criteria, "observations": observations})
+
+
+def test_a_class_meeting_every_observation_keeps_the_model_scores(monkeypatch):
+    result = _scored(monkeypatch, _GOOD_OBSERVATIONS)
+
+    assert all(result["criteria"][name]["score"] == 90.0 for name in CRITERIA)
+    assert result["observations"]["first_teaching_minute"] == 4.0
+
+
+def test_missing_behaviour_caps_the_related_criteria(monkeypatch):
+    weak = {
+        **_GOOD_OBSERVATIONS,
+        "objective_stated": False,
+        "new_concept_taught": False,
+        "recap_or_summary": False,
+        "understanding_checks": 0,
+        "teacher_present_until_end": False,
+        "feedback_on_student_work": False,
+    }
+
+    result = _scored(monkeypatch, weak)
+
+    expected = {
+        "class_structure": 55, "explanation_clarity": 55, "teaching_methods": 60,
+        "lesson_summary": 40, "student_interaction": 55, "pacing": 55, "responsiveness": 60,
+    }
+    for name, maximum in expected.items():
+        assert result["criteria"][name]["score"] == float(maximum)
+        assert "limited to" in result["criteria"][name]["score_notes"][0]
+    assert result["criteria"]["subject_accuracy"]["score"] == 90.0
+
+
+def test_a_score_below_the_limit_is_not_raised(monkeypatch):
+    criteria = {name: _criterion(30) for name in CRITERIA}
+
+    result = _run(
+        monkeypatch,
+        {"criteria": criteria, "observations": {**_GOOD_OBSERVATIONS, "objective_stated": False}},
+    )
+
+    assert result["criteria"]["class_structure"]["score"] == 30.0
+    assert "score_notes" not in result["criteria"]["class_structure"]
+
+
+def test_zero_checks_is_not_confused_with_false(monkeypatch):
+    result = _scored(monkeypatch, {**_GOOD_OBSERVATIONS, "understanding_checks": 0})
+
+    assert result["criteria"]["student_interaction"]["score"] == 55.0
+    assert result["criteria"]["class_structure"]["score"] == 90.0
+
+
+@pytest.mark.parametrize("observations", [None, "bad", [], {}, {"objective_stated": "no", "understanding_checks": "0"}])
+def test_missing_or_malformed_observations_apply_no_limits(monkeypatch, observations):
+    result = _scored(monkeypatch, observations)
+
+    assert all(result["criteria"][name]["score"] == 90.0 for name in CRITERIA)

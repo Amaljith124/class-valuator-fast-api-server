@@ -120,3 +120,15 @@ def test_overall_score_is_a_weighted_mean_over_assessable_criteria_only():
 
     assert result["overall_score"] == pytest.approx((80 * 0.20 + 60 * 0.10) / 0.30, abs=0.01)
     assert result["score_coverage"] == pytest.approx(0.30)
+
+
+def test_score_notes_and_observations_reach_the_report():
+    teaching = _teaching_result(
+        {"score": 40, "evidence": ["present"], "assessable": True, "score_notes": ["Score limited to 40"]}
+    )
+    teaching["observations"] = {"objective_stated": False}
+
+    result = combine(teaching, {}, {}, {"text": "present"})
+
+    assert result["criteria"]["subject_accuracy"]["score_notes"] == ["Score limited to 40"]
+    assert result["lesson_observations"] == {"objective_stated": False}

@@ -16,6 +16,7 @@ from app.services.audio_quality_service import analyze as analyze_audio
 from app.services.evidence_service import combine
 from app.services.r2_storage import downloaded_object_file
 from app.services.teaching_service import score
+from app.services.transcript_cleaning_service import clean_transcript
 from app.services.transcription_service import decode_audio_samples, transcribe_samples
 from app.services.transcript_processing_service import translate_and_label
 from app.services.video_screen_service import analyze as analyze_video
@@ -150,6 +151,9 @@ async def run(object_key: str, evaluation_id: str | None) -> dict:
                 transcript = transcript_result
                 audio = audio_result
 
+            # The saved checkpoint keeps the raw transcript; noise is removed for everything after it.
+            transcript = clean_transcript(transcript)
+
             stage = "English translation and speaker role inference"
             async with timed_stage(logger, stage, evaluation_id):
                 transcript, english_transcript, was_translated, roles = await translate_and_label(transcript)
@@ -211,6 +215,7 @@ async def run(object_key: str, evaluation_id: str | None) -> dict:
                 "language": transcript.get("language"),
                 "duration": transcript.get("duration"),
                 "segments": transcript.get("segments", []),
+                "cleaning": transcript.get("cleaning", {}),
             }
             result["transcription_english"] = {
                 "language": "en",

@@ -37,8 +37,25 @@ _CRITERION = _object(
     ["score", "assessable", "evidence"],
 )
 
+_OBSERVATIONS = _object(
+    {
+        "objective_stated": {"type": "boolean"},
+        "new_concept_taught": {"type": "boolean"},
+        "explains_why": {"type": "string", "enum": ["none", "rare", "some", "often"]},
+        "understanding_checks": {"type": "integer"},
+        "recap_or_summary": {"type": "boolean"},
+        "homework_or_next_steps": {"type": "boolean"},
+        "feedback_on_student_work": {"type": "boolean"},
+        "teacher_present_until_end": {"type": "boolean"},
+        "first_teaching_minute": _NULLABLE_NUMBER,
+        "instruction_delivered_by_media": {"type": "boolean"},
+        "class_type": {"type": "string", "enum": ["instruction", "practice", "mixed"]},
+    }
+)
+
 TEACHING_SCHEMA = _object(
     {
+        "observations": _OBSERVATIONS,
         "criteria": _object({name: _CRITERION for name in CRITERIA_NAMES}),
         "strengths": {"type": "array", "items": {"type": "string"}},
         "improvements": {"type": "array", "items": {"type": "string"}},

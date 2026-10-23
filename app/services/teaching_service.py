@@ -98,6 +98,56 @@ def _string_list(value) -> list[str]:
     return items
 
 
+# (observation, value that triggers the limit, criterion, maximum score, explanation)
+SCORE_LIMITS = [
+    ("objective_stated", False, "class_structure", 55, "No learning objective was stated"),
+    ("new_concept_taught", False, "explanation_clarity", 55, "No new concept was taught or explained"),
+    ("new_concept_taught", False, "teaching_methods", 60, "No new concept was taught or explained"),
+    ("recap_or_summary", False, "lesson_summary", 40, "No recap or summary was given"),
+    ("understanding_checks", 0, "student_interaction", 55, "No checks for understanding were made"),
+    ("teacher_present_until_end", False, "pacing", 55, "Teacher did not guide the class through to its end"),
+    ("feedback_on_student_work", False, "responsiveness", 60, "No specific feedback on student work"),
+]
+_OBSERVATION_FLAGS = (
+    "objective_stated", "new_concept_taught", "recap_or_summary", "homework_or_next_steps",
+    "feedback_on_student_work", "teacher_present_until_end", "instruction_delivered_by_media",
+)
+
+
+def _normalize_observations(raw) -> dict:
+    """Keep only well-typed observations; anything missing stays out so no limit is applied for it."""
+    if not isinstance(raw, dict):
+        return {}
+    observations: dict = {}
+    for name in _OBSERVATION_FLAGS:
+        if isinstance(raw.get(name), bool):
+            observations[name] = raw[name]
+    checks = raw.get("understanding_checks")
+    if isinstance(checks, (int, float)) and not isinstance(checks, bool) and math.isfinite(checks) and checks >= 0:
+        observations["understanding_checks"] = int(checks)
+    if raw.get("explains_why") in {"none", "rare", "some", "often"}:
+        observations["explains_why"] = raw["explains_why"]
+    if raw.get("class_type") in {"instruction", "practice", "mixed"}:
+        observations["class_type"] = raw["class_type"]
+    minute = _coerce_score(raw.get("first_teaching_minute"))
+    observations["first_teaching_minute"] = minute if minute is not None and minute >= 0 else None
+    return observations
+
+
+def _apply_score_limits(criteria: dict[str, dict], observations: dict) -> None:
+    for observation, trigger, name, maximum, reason in SCORE_LIMITS:
+        value = observations.get(observation)
+        # bool is an int subclass, so compare types as well to keep False apart from 0.
+        if observation not in observations or type(value) is not type(trigger) or value != trigger:
+            continue
+        criterion = criteria.get(name)
+        if criterion and criterion["assessable"] and criterion["score"] is not None and criterion["score"] > maximum:
+            criterion["score_notes"] = criterion.get("score_notes", []) + [
+                f"Score limited to {maximum} (model gave {criterion['score']:g}): {reason}"
+            ]
+            criterion["score"] = float(maximum)
+
+
 def _has_speech(transcript: dict) -> bool:
     return any(str(segment.get("text") or "").strip() for segment in transcript.get("segments", []))
 
@@ -107,6 +157,7 @@ def score(transcript: dict) -> dict:
         reason = "No speech was detected in the recording"
         return {
             "criteria": {name: _unassessable(reason) for name in CRITERIA},
+            "observations": {},
             "strengths": [],
             "improvements": [],
             "lesson_summary": "",
@@ -131,8 +182,11 @@ def score(transcript: dict) -> dict:
     for name in CRITERIA:
         entry = entries.get(name)
         criteria[name] = _normalize_criterion(entry) if entry is not None else _unassessable("Missing model result")
+    observations = _normalize_observations(result.get("observations"))
+    _apply_score_limits(criteria, observations)
     return {
         **result,
+        "observations": observations,
         "criteria": criteria,
         "strengths": _string_list(result.get("strengths")),
         "improvements": _string_list(result.get("improvements")),

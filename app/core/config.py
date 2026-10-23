@@ -14,13 +14,23 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-3.5-flash"
     gemini_light_model: str = "gemini-3.5-flash-lite"
     internal_api_token: str
-    whisper_model: str = "base"
+    whisper_model: str = "small"
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
     whisper_concurrency: int = 1
     whisper_batch_size: int = 8
     whisper_beam_size: int = 1
     whisper_language: str | None = None
+    # Languages the classes may use. When WHISPER_LANGUAGE is empty, the language is detected from
+    # several stretches of real speech and chosen from this list.
+    whisper_candidate_languages: str = "en,ml,hi,ta"
+    whisper_detection_windows: int = 5
+    whisper_detection_window_seconds: int = 30
+    whisper_vad_threshold: float = 0.55
+    whisper_min_silence_ms: int = 600
+    whisper_compression_ratio_threshold: float = 2.4
+    whisper_no_speech_threshold: float = 0.6
+    whisper_log_prob_threshold: float = -1.0
     whisper_cpu_threads: int = 0
     llm_batch_size: int = 120
     llm_concurrency: int = 3

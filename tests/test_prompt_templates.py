@@ -19,3 +19,10 @@ def test_prompts_preserve_unknown_or_unassessable_when_evidence_is_insufficient(
     assert "unassessable" in TEACHING_EFFECTIVENESS_SCORING_INSTRUCTIONS.lower()
     assert "unassessable" in VIDEO_SCREEN_ANALYSIS_INSTRUCTIONS.lower()
     assert "never fabricate" in TEACHING_EFFECTIVENESS_SCORING_INSTRUCTIONS.lower()
+
+
+def test_scoring_prompt_defines_a_rubric_for_every_criterion() -> None:
+    from app.services.teaching_service import CRITERIA
+
+    for name in CRITERIA:
+        assert f"- {name}:" in TEACHING_EFFECTIVENESS_SCORING_INSTRUCTIONS
