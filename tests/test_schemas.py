@@ -24,12 +24,6 @@ def test_teaching_schema_requires_every_criterion():
         "strengths": [],
         "improvements": [],
         "lesson_summary": "",
-        "observations": {
-            "objective_stated": True, "new_concept_taught": True, "explains_why": "some",
-            "understanding_checks": 1, "recap_or_summary": False, "homework_or_next_steps": False,
-            "feedback_on_student_work": False, "teacher_present_until_end": True,
-            "first_teaching_minute": None, "instruction_delivered_by_media": False, "class_type": "mixed",
-        },
     }
     jsonschema.validate(good, schemas.TEACHING_SCHEMA)
     with pytest.raises(jsonschema.ValidationError):
@@ -45,15 +39,16 @@ def test_segments_schema_limits_roles():
         jsonschema.validate({"segments": [{**segment, "speaker_role": "principal"}]}, schemas.SEGMENTS_SCHEMA)
 
 
-def test_teaching_schema_requires_observations():
-    criterion = {"score": None, "assessable": False, "evidence": []}
-    base = {"criteria": {name: criterion for name in CRITERIA}, "strengths": [], "improvements": [], "lesson_summary": ""}
-    with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate(base, schemas.TEACHING_SCHEMA)
+def test_observations_schema_requires_every_fact():
     observations = {
         "objective_stated": True, "new_concept_taught": True, "explains_why": "some",
         "understanding_checks": 1, "recap_or_summary": False, "homework_or_next_steps": False,
         "feedback_on_student_work": False, "teacher_present_until_end": True,
-        "first_teaching_minute": None, "instruction_delivered_by_media": False, "class_type": "mixed",
+        "first_teaching_minute": None, "instruction_delivered_by_media": False,
+        "media_without_follow_up": False, "class_type": "mixed",
     }
-    jsonschema.validate({**base, "observations": observations}, schemas.TEACHING_SCHEMA)
+    jsonschema.validate(observations, schemas.OBSERVATIONS_SCHEMA)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({key: value for key, value in observations.items() if key != "media_without_follow_up"}, schemas.OBSERVATIONS_SCHEMA)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({**observations, "class_type": "lecture"}, schemas.OBSERVATIONS_SCHEMA)

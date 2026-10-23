@@ -2,13 +2,15 @@ import re
 
 from app.services.teaching_service import CRITERIA
 
+# Weighted toward how the lesson is taught (explanation, methods, structure) rather than how
+# correct the content is, which good and weak classes tend to share.
 WEIGHTS = {
-    "subject_accuracy": 0.20,
-    "explanation_clarity": 0.15,
-    "teaching_methods": 0.12,
-    "class_structure": 0.10,
+    "subject_accuracy": 0.12,
+    "explanation_clarity": 0.20,
+    "teaching_methods": 0.16,
+    "class_structure": 0.12,
     "pacing": 0.10,
-    "student_interaction": 0.13,
+    "student_interaction": 0.10,
     "responsiveness": 0.10,
     "lesson_summary": 0.10,
 }

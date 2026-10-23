@@ -1,10 +1,24 @@
 import json
+import logging
 import math
 import re
+import statistics
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 
 from app.services.gemini_service import generate_json
-from app.services.schemas import TEACHING_SCHEMA
-from app.templates.prompt_templates import TEACHING_EFFECTIVENESS_SCORING_INSTRUCTIONS
+from app.services.schemas import OBSERVATIONS_SCHEMA, TEACHING_SCHEMA
+from app.templates.prompt_templates import (
+    LESSON_OBSERVATION_INSTRUCTIONS,
+    TEACHING_EFFECTIVENESS_SCORING_INSTRUCTIONS,
+)
+
+logger = logging.getLogger(__name__)
+# Facts are asked for several times with some randomness and the majority answer is kept, so one
+# unlucky answer cannot swing a class's score. The scoring call itself is pinned with a seed.
+OBSERVATION_VOTES = 3
+OBSERVATION_TEMPERATURE = 0.4
+SCORING_SEED = 7
 
 CRITERIA = ["subject_accuracy","explanation_clarity","teaching_methods","class_structure","pacing","student_interaction","responsiveness","lesson_summary"]
 _CRITERION_ID_KEYS = ("id", "criterion_id", "criterion", "name", "key")
@@ -107,10 +121,14 @@ SCORE_LIMITS = [
     ("understanding_checks", 0, "student_interaction", 55, "No checks for understanding were made"),
     ("teacher_present_until_end", False, "pacing", 55, "Teacher did not guide the class through to its end"),
     ("feedback_on_student_work", False, "responsiveness", 60, "No specific feedback on student work"),
+    ("media_without_follow_up", True, "explanation_clarity", 55, "A played recording was not framed or followed up"),
 ]
+# Flags where true is the worse answer, so a tied vote leans to true.
+_PROBLEM_FLAGS = {"media_without_follow_up"}
 _OBSERVATION_FLAGS = (
     "objective_stated", "new_concept_taught", "recap_or_summary", "homework_or_next_steps",
     "feedback_on_student_work", "teacher_present_until_end", "instruction_delivered_by_media",
+    "media_without_follow_up",
 )
 
 
@@ -132,6 +150,59 @@ def _normalize_observations(raw) -> dict:
     minute = _coerce_score(raw.get("first_teaching_minute"))
     observations["first_teaching_minute"] = minute if minute is not None and minute >= 0 else None
     return observations
+
+
+def _merge_observations(votes: list[dict]) -> dict:
+    """Majority answer per field across the normalised votes; ties favour the more cautious answer."""
+    merged: dict = {}
+    for name in _OBSERVATION_FLAGS:
+        answers = [vote[name] for vote in votes if name in vote]
+        if answers:
+            yes = sum(answers)
+            if yes * 2 == len(answers):
+                # A tie: assume the behaviour was absent, except for flags that describe a problem.
+                merged[name] = name in _PROBLEM_FLAGS
+            else:
+                merged[name] = yes * 2 > len(answers)
+    checks = [vote["understanding_checks"] for vote in votes if "understanding_checks" in vote]
+    if checks:
+        merged["understanding_checks"] = int(statistics.median_low(checks))
+    for name in ("explains_why", "class_type"):
+        answers = [vote[name] for vote in votes if name in vote]
+        if answers:
+            merged[name] = Counter(answers).most_common(1)[0][0]
+    minutes = [vote["first_teaching_minute"] for vote in votes if vote.get("first_teaching_minute") is not None]
+    merged["first_teaching_minute"] = round(float(statistics.median(minutes)), 2) if minutes else None
+    return merged
+
+
+def _observe(segments_payload: list[dict]) -> dict:
+    """Ask for the lesson facts several times and keep the majority answer."""
+
+    def ask(seed: int):
+        return generate_json(
+            LESSON_OBSERVATION_INSTRUCTIONS,
+            {"segments": segments_payload},
+            thinking=False,
+            schema=OBSERVATIONS_SCHEMA,
+            temperature=OBSERVATION_TEMPERATURE,
+            seed=seed,
+        )
+
+    with ThreadPoolExecutor(max_workers=OBSERVATION_VOTES) as executor:
+        futures = [executor.submit(ask, seed) for seed in range(1, OBSERVATION_VOTES + 1)]
+    votes = []
+    for future in futures:
+        try:
+            votes.append(_normalize_observations(future.result()))
+        except Exception as error:
+            logger.warning("[teaching.observe] one observation answer failed and is ignored: %s", error)
+    if not votes:
+        logger.warning("[teaching.observe] no observation answer was usable; no score limits will apply")
+        return {}
+    merged = _merge_observations(votes)
+    merged["votes"] = len(votes)
+    return merged
 
 
 def _apply_score_limits(criteria: dict[str, dict], observations: dict) -> None:
@@ -163,26 +234,30 @@ def score(transcript: dict) -> dict:
             "lesson_summary": "",
         }
 
-    payload = {
-        "criteria": CRITERIA,
-        "segments": [
-            {
-                "index": index,
-                "start": segment.get("start"),
-                "end": segment.get("end"),
-                "speaker_role": segment.get("speaker_role", "unknown"),
-                "text": segment.get("text", ""),
-            }
-            for index, segment in enumerate(transcript.get("segments", []))
-        ],
-    }
-    result = generate_json(TEACHING_EFFECTIVENESS_SCORING_INSTRUCTIONS, payload, list_key="criteria", schema=TEACHING_SCHEMA)
+    segments_payload = [
+        {
+            "index": index,
+            "start": segment.get("start"),
+            "end": segment.get("end"),
+            "speaker_role": segment.get("speaker_role", "unknown"),
+            "text": segment.get("text", ""),
+        }
+        for index, segment in enumerate(transcript.get("segments", []))
+    ]
+    observations = _observe(segments_payload)
+    payload = {"criteria": CRITERIA, "observations": observations, "segments": segments_payload}
+    result = generate_json(
+        TEACHING_EFFECTIVENESS_SCORING_INSTRUCTIONS,
+        payload,
+        list_key="criteria",
+        schema=TEACHING_SCHEMA,
+        seed=SCORING_SEED,
+    )
     entries = _criteria_by_name(result.get("criteria"))
     criteria = {}
     for name in CRITERIA:
         entry = entries.get(name)
         criteria[name] = _normalize_criterion(entry) if entry is not None else _unassessable("Missing model result")
-    observations = _normalize_observations(result.get("observations"))
     _apply_score_limits(criteria, observations)
     return {
         **result,

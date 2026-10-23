@@ -2,6 +2,7 @@ import pytest
 
 from app.services import teaching_service
 from app.services.teaching_service import CRITERIA
+from app.templates.prompt_templates import LESSON_OBSERVATION_INSTRUCTIONS
 
 
 def _transcript(count=3):
@@ -17,8 +18,19 @@ def _criterion(score=80):
     return {"score": score, "assessable": True, "evidence": [{"quote": "line 1"}], "rationale": "ok"}
 
 
-def _run(monkeypatch, model_result, transcript=None):
-    monkeypatch.setattr(teaching_service, "generate_json", lambda *args, **kwargs: model_result)
+def _run(monkeypatch, model_result, transcript=None, observations=None, calls=None):
+    """Answer observation requests with `observations` and scoring requests with `model_result`."""
+
+    def fake(instructions, payload, **kwargs):
+        if calls is not None:
+            calls.append({"instructions": instructions, "payload": payload, **kwargs})
+        if instructions is LESSON_OBSERVATION_INSTRUCTIONS:
+            if isinstance(observations, Exception):
+                raise observations
+            return observations if observations is not None else {}
+        return model_result
+
+    monkeypatch.setattr(teaching_service, "generate_json", fake)
     return teaching_service.score(transcript or _transcript())
 
 
@@ -140,13 +152,14 @@ _GOOD_OBSERVATIONS = {
     "teacher_present_until_end": True,
     "first_teaching_minute": 4,
     "instruction_delivered_by_media": False,
+    "media_without_follow_up": False,
     "class_type": "instruction",
 }
 
 
 def _scored(monkeypatch, observations):
     criteria = {name: _criterion(90) for name in CRITERIA}
-    return _run(monkeypatch, {"criteria": criteria, "observations": observations})
+    return _run(monkeypatch, {"criteria": criteria}, observations=observations)
 
 
 def test_a_class_meeting_every_observation_keeps_the_model_scores(monkeypatch):
@@ -184,7 +197,8 @@ def test_a_score_below_the_limit_is_not_raised(monkeypatch):
 
     result = _run(
         monkeypatch,
-        {"criteria": criteria, "observations": {**_GOOD_OBSERVATIONS, "objective_stated": False}},
+        {"criteria": criteria},
+        observations={**_GOOD_OBSERVATIONS, "objective_stated": False},
     )
 
     assert result["criteria"]["class_structure"]["score"] == 30.0
@@ -203,3 +217,82 @@ def test_missing_or_malformed_observations_apply_no_limits(monkeypatch, observat
     result = _scored(monkeypatch, observations)
 
     assert all(result["criteria"][name]["score"] == 90.0 for name in CRITERIA)
+
+
+def _votes(*overrides):
+    return [{**_GOOD_OBSERVATIONS, **override} for override in overrides]
+
+
+def test_merge_takes_the_majority_answer_per_field():
+    merged = teaching_service._merge_observations(
+        [
+            teaching_service._normalize_observations(vote)
+            for vote in _votes(
+                {"objective_stated": False, "understanding_checks": 0, "class_type": "practice", "first_teaching_minute": 9},
+                {"objective_stated": True, "understanding_checks": 3, "first_teaching_minute": 4},
+                {"objective_stated": True, "understanding_checks": 2, "first_teaching_minute": 5},
+            )
+        ]
+    )
+
+    assert merged["objective_stated"] is True
+    assert merged["understanding_checks"] == 2
+    assert merged["class_type"] == "instruction"
+    assert merged["first_teaching_minute"] == 5.0
+
+
+def test_a_tied_vote_assumes_the_good_behaviour_was_absent():
+    merged = teaching_service._merge_observations(
+        [
+            teaching_service._normalize_observations(vote)
+            for vote in _votes({"recap_or_summary": True, "media_without_follow_up": False}, {"recap_or_summary": False, "media_without_follow_up": True})
+        ]
+    )
+
+    assert merged["recap_or_summary"] is False
+    assert merged["media_without_follow_up"] is True
+
+
+def test_three_observation_requests_are_made_with_different_seeds_and_some_randomness(monkeypatch):
+    calls = []
+    _run(monkeypatch, {"criteria": {}}, observations=_GOOD_OBSERVATIONS, calls=calls)
+
+    observation_calls = [call for call in calls if call["instructions"] is LESSON_OBSERVATION_INSTRUCTIONS]
+    assert len(observation_calls) == teaching_service.OBSERVATION_VOTES
+    assert len({call["seed"] for call in observation_calls}) == teaching_service.OBSERVATION_VOTES
+    assert all(call["temperature"] == teaching_service.OBSERVATION_TEMPERATURE for call in observation_calls)
+
+
+def test_the_scoring_request_is_pinned_and_receives_the_agreed_observations(monkeypatch):
+    calls = []
+    result = _run(monkeypatch, {"criteria": {}}, observations=_GOOD_OBSERVATIONS, calls=calls)
+
+    scoring = [call for call in calls if call["instructions"] is not LESSON_OBSERVATION_INSTRUCTIONS]
+    assert len(scoring) == 1
+    assert scoring[0]["seed"] == teaching_service.SCORING_SEED
+    assert scoring[0].get("temperature", 0) == 0
+    assert scoring[0]["payload"]["observations"]["objective_stated"] is True
+    assert result["observations"]["votes"] == teaching_service.OBSERVATION_VOTES
+
+
+def test_a_failed_observation_request_does_not_stop_scoring(monkeypatch):
+    result = _run(
+        monkeypatch,
+        {"criteria": {name: _criterion(90) for name in CRITERIA}},
+        observations=RuntimeError("gemini down"),
+    )
+
+    assert result["observations"] == {}
+    assert all(result["criteria"][name]["score"] == 90.0 for name in CRITERIA)
+
+
+def test_an_unframed_recording_limits_explanation_clarity(monkeypatch):
+    result = _scored(monkeypatch, {**_GOOD_OBSERVATIONS, "instruction_delivered_by_media": True, "media_without_follow_up": True})
+
+    assert result["criteria"]["explanation_clarity"]["score"] == 55.0
+
+
+def test_a_framed_recording_is_not_limited(monkeypatch):
+    result = _scored(monkeypatch, {**_GOOD_OBSERVATIONS, "instruction_delivered_by_media": True, "media_without_follow_up": False})
+
+    assert result["criteria"]["explanation_clarity"]["score"] == 90.0

@@ -49,13 +49,15 @@ _OBSERVATIONS = _object(
         "teacher_present_until_end": {"type": "boolean"},
         "first_teaching_minute": _NULLABLE_NUMBER,
         "instruction_delivered_by_media": {"type": "boolean"},
+        "media_without_follow_up": {"type": "boolean"},
         "class_type": {"type": "string", "enum": ["instruction", "practice", "mixed"]},
     }
 )
 
+OBSERVATIONS_SCHEMA = _OBSERVATIONS
+
 TEACHING_SCHEMA = _object(
     {
-        "observations": _OBSERVATIONS,
         "criteria": _object({name: _CRITERION for name in CRITERIA_NAMES}),
         "strengths": {"type": "array", "items": {"type": "string"}},
         "improvements": {"type": "array", "items": {"type": "string"}},

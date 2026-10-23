@@ -118,8 +118,13 @@ def test_overall_score_is_a_weighted_mean_over_assessable_criteria_only():
 
     result = combine(teaching, {}, {}, {"text": "a b"})
 
-    assert result["overall_score"] == pytest.approx((80 * 0.20 + 60 * 0.10) / 0.30, abs=0.01)
-    assert result["score_coverage"] == pytest.approx(0.30)
+    from app.services.evidence_service import WEIGHTS
+
+    weight_a, weight_b = WEIGHTS["subject_accuracy"], WEIGHTS["pacing"]
+    assert result["overall_score"] == pytest.approx(
+        (80 * weight_a + 60 * weight_b) / (weight_a + weight_b), abs=0.01
+    )
+    assert result["score_coverage"] == pytest.approx(weight_a + weight_b)
 
 
 def test_score_notes_and_observations_reach_the_report():
@@ -132,3 +137,10 @@ def test_score_notes_and_observations_reach_the_report():
 
     assert result["criteria"]["subject_accuracy"]["score_notes"] == ["Score limited to 40"]
     assert result["lesson_observations"] == {"objective_stated": False}
+
+
+def test_weights_cover_every_criterion_and_sum_to_one():
+    from app.services.evidence_service import WEIGHTS
+
+    assert set(WEIGHTS) == set(CRITERIA)
+    assert sum(WEIGHTS.values()) == pytest.approx(1.0)

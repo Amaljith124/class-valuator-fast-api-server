@@ -95,13 +95,17 @@ def _generate_once(
     model_name: str,
     max_output_tokens: int,
     schema: dict | None = None,
+    temperature: float = 0,
+    seed: int | None = None,
 ):
     config_values = {
         "system_instruction": instructions,
         "response_mime_type": "application/json",
-        "temperature": 0,
+        "temperature": temperature,
         "max_output_tokens": max_output_tokens,
     }
+    if seed is not None:
+        config_values["seed"] = seed
     if schema is not None:
         config_values["response_json_schema"] = schema
     thinking_config = _thinking_config(thinking, model_name)
@@ -121,6 +125,8 @@ def _generate_with_retry(
     model_name: str,
     max_output_tokens: int = MAX_OUTPUT_TOKENS,
     schema: dict | None = None,
+    temperature: float = 0,
+    seed: int | None = None,
 ):
     request_schema = schema
     request_thinking = thinking
@@ -129,7 +135,8 @@ def _generate_with_retry(
     while True:
         try:
             return _generate_once(
-                contents, instructions, request_thinking, model_name, request_max_tokens, request_schema
+                contents, instructions, request_thinking, model_name, request_max_tokens, request_schema,
+                temperature, seed,
             )
         except Exception as error:
             message = str(error).lower()
@@ -205,6 +212,8 @@ def _generate_json_response(
     list_key: str | None,
     max_output_tokens: int | None,
     schema: dict | None = None,
+    temperature: float = 0,
+    seed: int | None = None,
 ) -> dict:
     """Call the model and parse its answer, asking once more if the answer is unusable."""
     last_error: GeminiOutputError | None = None
@@ -216,6 +225,8 @@ def _generate_json_response(
             model_name,
             max_output_tokens or MAX_OUTPUT_TOKENS,
             schema,
+            temperature,
+            seed,
         )
         try:
             return _response_json(response, list_key)
@@ -240,6 +251,8 @@ def generate_json(
     list_key: str | None = None,
     max_output_tokens: int | None = None,
     schema: dict | None = None,
+    temperature: float = 0,
+    seed: int | None = None,
 ) -> dict:
     return _generate_json_response(
         json.dumps(payload, ensure_ascii=False),
@@ -249,6 +262,8 @@ def generate_json(
         list_key,
         max_output_tokens,
         schema,
+        temperature,
+        seed,
     )
 
 

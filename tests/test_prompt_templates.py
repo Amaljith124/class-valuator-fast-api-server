@@ -26,3 +26,11 @@ def test_scoring_prompt_defines_a_rubric_for_every_criterion() -> None:
 
     for name in CRITERIA:
         assert f"- {name}:" in TEACHING_EFFECTIVENESS_SCORING_INSTRUCTIONS
+
+
+def test_observation_prompt_defines_every_observation_field() -> None:
+    from app.services.schemas import OBSERVATIONS_SCHEMA
+    from app.templates.prompt_templates import LESSON_OBSERVATION_INSTRUCTIONS
+
+    for name in OBSERVATIONS_SCHEMA["properties"]:
+        assert f"- {name}:" in LESSON_OBSERVATION_INSTRUCTIONS

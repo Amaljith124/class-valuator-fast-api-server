@@ -192,3 +192,21 @@ def test_a_rejected_schema_is_retried_without_it(monkeypatch, sleeps):
 
     assert gemini.generate_json("instructions", {}, schema=schema) == {"ok": 1}
     assert seen == [schema, None]
+
+
+def test_temperature_and_seed_are_sent_to_the_model(monkeypatch):
+    seen = []
+
+    class RecordingClient(_FakeClient):
+        def _generate(self, **kwargs):
+            config = kwargs["config"]
+            seen.append((config.temperature, config.seed))
+            return super()._generate(**kwargs)
+
+    fake = RecordingClient([_response('{"a": 1}'), _response('{"a": 1}')])
+    monkeypatch.setattr(gemini, "client", lambda: fake)
+
+    gemini.generate_json("instructions", {})
+    gemini.generate_json("instructions", {}, temperature=0.4, seed=9)
+
+    assert seen == [(0, None), (0.4, 9)]
